@@ -1,54 +1,69 @@
-from flask import Flask, request
-import random, datetime
+
+import os
+from flask import Flask, request, jsonify
+import requests
 
 app = Flask(__name__)
 
-tickets = {}
-ticket_counter = 1000
+# المتغيرات من Render Environment
+VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "ZoolTicket123")
+PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID", "1409435178926240")
+WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN") or os.environ.get("WHATSAPP_ACCESS_TOKEN") or os.environ.get("META_ACCESS_TOKEN")
+TICKET_API_URL = os.environ.get("TICKET_API_URL", "https://ticket.zoolsay.com/api/whatsapp")
 
-@app.route('/')
+@app.route("/")
 def home():
-    return f"Ticket Bot Running ✅ - {len(tickets)} تذكرة"
+    return "WhatsApp Ticket Bot is Live! Webhook: /webhook", 200
 
-@app.route('/webhook', methods=['GET','POST'])
-def webhook():
-    global ticket_counter
-    if request.method == 'GET':
-        token = request.args.get('hub.verify_token')
-        if token == 'nizar123':
-            return request.args.get('hub.challenge')
-        return "Failed", 403
+@app.route("/webhook", methods=["GET"])
+def verify_webhook():
+    mode = request.args.get("hub.mode")
+    token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
     
-    if request.method == 'POST':
+    print(f"Verify attempt: mode={mode}, token={token}, challenge={challenge}")
+    print(f"Expected token: {VERIFY_TOKEN}")
+    
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        print("WEBHOOK VERIFIED SUCCESSFULLY!")
+        return challenge, 200
+    else:
+        print(f"Verification FAILED - received token: {token}")
+        return "Verification failed", 403
+
+@app.route("/webhook", methods=["POST"])
+def handle_message():
+    try:
         data = request.get_json()
-        print(data)
-        try:
-            # استخراج رسالة واتساب
-            entry = data['entry'][0]['changes'][0]['value']
-            if 'messages' in entry:
-                msg = entry['messages'][0]
-                from_num = msg['from']
-                text = msg['text']['body']
-                
-                ticket_counter += 1
-                ticket_id = f"TCK-{ticket_counter}"
-                tickets[ticket_id] = {
-                    "رقم": from_num,
-                    "مشكلة": text,
-                    "وقت": str(datetime.datetime.now()),
-                    "حالة": "مفتوحة"
-                }
-                print(f"تذكرة جديدة {ticket_id}: {text}")
-        except Exception as e:
-            print(f"Error: {e}")
-        return "OK", 200
+        print(f"Incoming webhook: {data}")
+        
+        # Forward to ticket system if configured
+        if data and "entry" in data:
+            for entry in data.get("entry", []):
+                for change in entry.get("changes", []):
+                    value = change.get("value", {})
+                    messages = value.get("messages", [])
+                    for msg in messages:
+                        # Forward to your ticket system
+                        try:
+                            if TICKET_API_URL:
+                                requests.post(TICKET_API_URL, json=data, timeout=5)
+                        except Exception as e:
+                            print(f"Forward error: {e}")
+                        
+                        # Optional: auto reply
+                        from_number = msg.get("from")
+                        msg_type = msg.get("type")
+                        if msg_type == "text" and WHATSAPP_TOKEN and from_number:
+                            text = msg.get("text", {}).get("body", "")
+                            print(f"Message from {from_number}: {text}")
+                            # You can add auto-reply here
+        
+        return jsonify({"status": "ok"}), 200
+    except Exception as e:
+        print(f"Error handling webhook: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 200
 
-@app.route('/tickets')
-def list_tickets():
-    html = "<h1>نظام تذاكر المراكز</h1>"
-    for tid, t in tickets.items():
-        html += f"<p><b>{tid}</b> - {t['مشكلة']} - {t['حالة']} - {t['رقم']}</p>"
-    return html
-
-if __name__ == '__main__':
-    app.run()
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
