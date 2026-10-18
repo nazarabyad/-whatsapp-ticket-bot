@@ -104,8 +104,17 @@ def download_whatsapp_media(media_id):
         meta = requests.get(
             f"https://graph.facebook.com/v21.0/{media_id}", headers=h, timeout=10
         ).json()
-        url = meta.get("url")
-        if not url:
+    url = meta.get("url")
+     @app.route("/subscribe-waba")
+def subscribe_waba():
+    waba_id = "1166674012694127"
+    r = requests.post(
+        f"https://graph.facebook.com/v21.0/{waba_id}/subscribed_apps",
+        headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"},
+        timeout=10,
+    )
+    return r.text, r.status_code
+    if not url:
             return None
         return requests.get(url, headers=h, timeout=20).content
     except Exception as e:
