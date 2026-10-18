@@ -6,31 +6,18 @@ import requests
 
 app = Flask(__name__)
 
-# ---- Render environment variables ----
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "ZoolTicket123")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID", "1407724379087822")
-WHATSAPP_TOKEN = (
-    os.environ.get("WHATSAPP_TOKEN")
-    or os.environ.get("WHATSAPP_ACCESS_TOKEN")
-    or os.environ.get("META_ACCESS_TOKEN")
-)
+WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN") or os.environ.get("WHATSAPP_ACCESS_TOKEN") or os.environ.get("META_ACCESS_TOKEN")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 COMPANY_NAME = "معالجات التقانة والمعلومات والدعم الفني"
+IP_PREFIX = os.environ.get("IP_PREFIX", "192.168.") 
 
-PROBLEM_TYPES = [
-    "انقطاع الإنترنت",
-    "بطء الشبكة",
-    "مشكلة في الجهاز",
-    "مشكلة في الكهرباء",
-    "مشكلة في البرنامج",
-    "أخرى",
-]
-
-SESSION_TTL = 30 * 60
+SESSION_TTL = 30*60
 PHONE_RE = re.compile(r"WA:(\d{6,20})")
-IP_RE = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
+IP_FULL_RE = re.compile(r"(?:\d{1,3}\.){3}\d{1,3}")
 
 sessions = {}
 seen_ids = set()
@@ -38,25 +25,21 @@ processed_tickets = {}
 
 def wa_post(payload):
     try:
-        r = requests.post(
-            f"https://graph.facebook.com/v21.0/{PHONE_NUMBER_ID}/messages",
-            headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"},
-            json=payload,
-            timeout=10,
-        )
+        r = requests.post(f"https://graph.facebook.com/v21.0/{PHONE_NUMBER_ID}/messages", headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}, json=payload, timeout=10)
         return r.status_code == 200
-    except:
-        return False
+    except: return False
 
 def send_whatsapp(to_number, body):
     return wa_post({"messaging_product": "whatsapp","to": to_number,"type": "text","text": {"body": body}})
 
-def send_type_list(to_number):
-    rows = [{"id": f"type_{i}", "title": t[:24]} for i, t in enumerate(PROBLEM_TYPES)]
-    return wa_post({"messaging_product": "whatsapp","to": to_number,"type": "interactive","interactive": {"type": "list","header": {"type": "text", "text": COMPANY_NAME[:60]},"body": {"text": "مرحباً بك في خدمة الدعم الفني.\nاختر نوع المشكلة لفتح تذكرة:"},"action": {"button": "اختر النوع","sections": [{"title": "أنواع المشاكل", "rows": rows}]}}})
-
-def send_photo_buttons(to_number):
-    return wa_post({"messaging_product": "whatsapp","to": to_number,"type": "interactive","interactive": {"type": "button","body": {"text": "هل تريد إرفاق صورة للمشكلة؟"},"action": {"buttons": [{"type": "reply", "reply": {"id": "upload", "title": "📷 رفع صورة"}},{"type": "reply", "reply": {"id": "skip", "title": "تخطي"}}]}}})
+def send_main_message(to_number):
+    # الرسالة الوحيدة البتظهر للعميل
+    return send_whatsapp(to_number,
+        "مرحبا بك في معالجات التقانة والدعم الفني 👋\n\n"
+        "اكتب مشكلتك ورقم IP المركز ومنطقتك\n"
+        "ويمكنك إرفاق صورة مع الرسالة 📷\n\n"
+        "مثال: النت قاطع - 2.2 - ابوحمد"
+    )
 
 def download_whatsapp_media(media_id):
     try:
@@ -65,21 +48,18 @@ def download_whatsapp_media(media_id):
         url = meta.get("url")
         if not url: return None
         return requests.get(url, headers=h, timeout=20).content
-    except:
-        return None
+    except: return None
 
 def send_telegram(chat_id, text):
     if not TELEGRAM_BOT_TOKEN: return
-    try:
-        requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": text}, timeout=10)
+    try: requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": text}, timeout=10)
     except: pass
 
 def send_telegram_photo(chat_id, photo_bytes, caption):
     try:
         r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto", data={"chat_id": chat_id, "caption": caption[:1000]}, files={"photo": ("problem.jpg", photo_bytes)}, timeout=30)
         return r.status_code == 200
-    except:
-        return False
+    except: return False
 
 def edit_telegram_message(chat_id, message_id, original_text, technician_name, reply_text, is_caption=False):
     try:
@@ -87,8 +67,7 @@ def edit_telegram_message(chat_id, message_id, original_text, technician_name, r
         clean_old = original_text
         if "تمت المعالجة - مغلق" in clean_old:
             parts = clean_old.split("----------------------------")
-            if len(parts) > 1:
-                clean_old = parts[-1].strip()
+            if len(parts) > 1: clean_old = parts[-1].strip()
         new_text = f"""✅ تمت المعالجة - مغلق
 👨‍🔧 بواسطة: {technician_name}
 🕒 الوقت: {khartoum_time}
@@ -98,27 +77,94 @@ def edit_telegram_message(chat_id, message_id, original_text, technician_name, r
 """
         method = "editMessageCaption" if is_caption else "editMessageText"
         payload = {"chat_id": chat_id, "message_id": message_id}
-        if is_caption:
-            payload["caption"] = new_text[:1000]
-        else:
-            payload["text"] = new_text[:4000]
+        if is_caption: payload["caption"] = new_text[:1000]
+        else: payload["text"] = new_text[:4000]
         r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/{method}", json=payload, timeout=10)
-        print(f"EDIT {message_id}: {r.text}")
         return r.status_code == 200
-    except Exception as e:
-        print(f"Edit failed: {e}")
-        return False
+    except: return False
 
-def finish_ticket(number, name, photo_bytes=None):
-    s = sessions.pop(number, {})
+def parse_message(text):
+    # يطلع IP ونوع وموقع ووصف من رسالة واحدة
+    original = text.strip()
+    ip = "-"
+    m_full = IP_FULL_RE.search(original)
+    if m_full:
+        ip = m_full.group(0)
+    else:
+        shorts = re.findall(r"\b\d{1,3}(?:\.\d{1,3})+\b", original)
+        if shorts:
+            cand = shorts[0]
+            if cand.startswith("216."):
+                ip = "192.168." + cand
+            elif cand.count(".") == 1:
+                # 2.2 -> 192.186.2.2
+                ip = f"192.186.{cand}" if IP_PREFIX.startswith("192.186") or True else IP_PREFIX + cand
+                # نخليها بسيطة: لو كتب 2.2 نعتبرها 192.186.2.2
+                if cand.count(".") == 1 and not cand.startswith("192"):
+                    ip = f"192.186.{cand}"
+            else:
+                ip = cand
+
+    # النوع
+    problem_type = "أخرى"
+    if "انقطاع" in original or "قاطع" in original or "فاصل" in original: problem_type = "انقطاع الإنترنت"
+    elif "بطء" in original or "بطي" in original: problem_type = "بطء الشبكة"
+    elif "كهرب" in original: problem_type = "مشكلة في الكهرباء"
+    elif "جهاز" in original: problem_type = "مشكلة في الجهاز"
+
+    # الموقع والوصف - نقسم بالـ -
+    parts = re.split(r"\s*[-–—]\s*|\n", original)
+    parts = [p.strip() for p in parts if p.strip()]
+    location = "-"
+    description = original
+
+    if len(parts) >= 2:
+        # نحاول نلقى الموقع: الجزء الما فيهو IP وما هو النوع
+        for p in parts:
+            if ip != "-" and ip in p: continue
+            if p == problem_type: continue
+            # اول جزء فيهو حروف عربية نعتبرو موقع
+            if re.search(r"[ا-ي]", p) and len(p) < 30:
+                if location == "-":
+                    location = p
+                else:
+                    description = p
+
+        if len(parts) >= 3:
+            location = parts[1] if parts[1] != ip else parts[2] if len(parts) > 2 else "-"
+            description = " - ".join(parts[2:]) if len(parts) > 2 else original
+        # لو الوصف هو نفس الموقع، خلي الوصف هو النص كامل
+        if description == location:
+            description = original
+    else:
+        # لو ما مقسم، شيل الموقع بعد ال IP
+        if ip != "-":
+            after = original.split(ip)[-1]
+            after = re.sub(r"[0-9\.\-]", "", after).strip()
+            if after:
+                location = " ".join(after.split()[:3])
+
+    return {"type": problem_type, "ip": ip, "location": location, "description": description, "raw": original}
+
+def finish_ticket(number, name, parsed, photo_bytes=None):
     ticket = int(time.time()) % 1000000
-    text = f"{COMPANY_NAME}\nتذكرة جديدة #{ticket}\nالعميل: {name or 'غير معروف'}\nالنوع: {s.get('type', '-')}\nIP المركز: {s.get('ip', '-')}\nالموقع: {s.get('location', '-')}\nWA:{number}\n\n(اعمل Reply على هذه الرسالة للرد على العميل)"
+    text = (
+        f"{COMPANY_NAME}\n"
+        f"تذكرة جديدة #{ticket}\n"
+        f"العميل: {name or 'غير معروف'}\n"
+        f"النوع: {parsed['type']}\n"
+        f"IP المركز: {parsed['ip']}\n"
+        f"الموقع: {parsed['location']}\n"
+        f"الوصف: {parsed['description']}\n"
+        f"WA:{number}\n\n"
+        f"(اعمل Reply على هذه الرسالة للرد على العميل)"
+    )
     sent = False
     if photo_bytes:
         sent = send_telegram_photo(TELEGRAM_CHAT_ID, photo_bytes, text)
     if not sent:
         send_telegram(TELEGRAM_CHAT_ID, text)
-    send_whatsapp(number, f"شكراً لتواصلك مع {COMPANY_NAME}.\nتم فتح تذكرتك رقم #{ticket}، وسيتواصل معك فريق الدعم الفني قريباً.")
+    send_whatsapp(number, f"تم استلام بلاغك ✅ رقم #{ticket}\nسيتواصل معك الدعم الفني قريبا.")
 
 def handle_customer_message(msg, name):
     number = msg.get("from")
@@ -126,65 +172,52 @@ def handle_customer_message(msg, name):
     now = time.time()
     s = sessions.get(number)
     if s and now - s["ts"] > SESSION_TTL:
-        s = None
         sessions.pop(number, None)
+        s = None
+
     text = ""
+    photo_bytes = None
+
     if msg_type == "text":
         text = msg.get("text", {}).get("body", "").strip()
-    reply_id = None
-    if msg_type == "interactive":
-        inter = msg.get("interactive", {})
-        if inter.get("type") == "list_reply":
-            reply_id = inter["list_reply"].get("id")
-        elif inter.get("type") == "button_reply":
-            reply_id = inter["button_reply"].get("id")
-    if text in ("إلغاء", "الغاء", "cancel", "Cancel"):
-        sessions.pop(number, None)
-        send_type_list(number)
-        return
+    elif msg_type == "image":
+        media_id = msg.get("image", {}).get("id")
+        photo_bytes = download_whatsapp_media(media_id) if media_id else None
+        text = msg.get("image", {}).get("caption", "") or ""  # لو الصورة معاها كلام
+
+    if text.lower() in ("إلغاء", "الغاء", "cancel", "بلاغ جديد", "السلام عليكم", "سلام", "مرحبا", "hi", "hello"):
+        # اي تحية نرد بالرسالة الرئيسية بس
+        if len(text.split()) <= 2:  # لو كلمة واحدة بس
+            sessions[number] = {"step": "wait", "ts": now}
+            send_main_message(number)
+            return
+
+    # لو مافي جلسة ودي اول رسالة فيها تفاصيل، طوالي نحللها
     if not s:
-        sessions[number] = {"step": "type", "ts": now}
-        send_type_list(number)
+        # لو الرسالة قصيرة شديد و ما فيها تفاصيل، نرسل التعليمات
+        if len(text) < 8 and not photo_bytes:
+            sessions[number] = {"step": "wait", "ts": now}
+            send_main_message(number)
+            return
+        # غير كده نعتبرها بلاغ مباشر
+        parsed = parse_message(text)
+        finish_ticket(number, name, parsed, photo_bytes)
+        sessions.pop(number, None)
         return
-    s["ts"] = now
-    step = s["step"]
-    if step == "type":
-        if reply_id and reply_id.startswith("type_"):
-            idx = int(reply_id.split("_")[1])
-            s["type"] = PROBLEM_TYPES[idx]
-            s["step"] = "ip"
-            send_whatsapp(number, "اكتب رقم IP المركز (مثال: 192.168.1.10):")
-        else:
-            send_type_list(number)
-    elif step == "ip":
-        if msg_type == "text" and IP_RE.match(text):
-            s["ip"] = text
-            s["step"] = "location"
-            send_whatsapp(number, "اكتب اسم المركز ومكانه:")
-        else:
-            send_whatsapp(number, "رقم IP غير صحيح.")
-    elif step == "location":
-        if msg_type == "text" and text:
-            s["location"] = text
-            s["step"] = "photo"
-            send_photo_buttons(number)
-        else:
-            send_whatsapp(number, "اكتب اسم المركز.")
-    elif step == "photo":
-        if msg_type == "image":
-            media_id = msg.get("image", {}).get("id")
-            photo = download_whatsapp_media(media_id) if media_id else None
-            finish_ticket(number, name, photo)
-        elif reply_id == "skip":
-            finish_ticket(number, name, None)
-        elif reply_id == "upload":
-            send_whatsapp(number, "أرسل الصورة الآن.")
-        else:
-            send_photo_buttons(number)
+
+    # لو في جلسة انتظار
+    if s.get("step") == "wait":
+        if not text and not photo_bytes:
+            send_main_message(number)
+            return
+        parsed = parse_message(text)
+        finish_ticket(number, name, parsed, photo_bytes or s.get("photo"))
+        sessions.pop(number, None)
+        return
 
 @app.route("/")
 def home():
-    return "Bot Live V2 - تمت المعالجة في نفس البلاغ", 200
+    return "Bot V4 - رسالة واحدة فقط: مشكلتك + IP + منطقتك + صورة", 200
 
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
@@ -238,25 +271,20 @@ def handle_telegram():
         text = (message.get("text", "") or "").strip()
         from_user = message.get("from") or {}
         technician_name = f"{from_user.get('first_name','')} {from_user.get('last_name','')}".strip() or from_user.get("username","فني")
-
-        if not chat_id:
-            return jsonify({"ok": True}), 200
+        if not chat_id: return jsonify({"ok": True}), 200
         if text.startswith("/start"):
             send_telegram(chat_id, f"Your chat id is: {chat_id}\nمرحبا {technician_name}")
             return jsonify({"ok": True}), 200
-
         replied = message.get("reply_to_message")
         if replied and text:
             original_msg_id = replied.get("message_id")
             src = replied.get("text") or replied.get("caption") or ""
             m = PHONE_RE.search(src)
             is_caption = bool(replied.get("caption"))
-
             if original_msg_id in processed_tickets:
                 prev = processed_tickets[original_msg_id]
                 send_telegram(chat_id, f"⚠️ ممنوع! البلاغ ده تمت معالجتو قبل كده\n✅ بواسطة: {prev['by']}\n🕒 الوقت: {prev['time']}\nالرد السابق: {prev['reply']}")
                 return jsonify({"ok": True}), 200
-
             if m:
                 khartoum_time = time.strftime("%I:%M %p - %d/%m", time.localtime())
                 processed_tickets[original_msg_id] = {"by": technician_name, "time": khartoum_time, "reply": text}
@@ -268,7 +296,6 @@ def handle_telegram():
                     send_telegram(chat_id, "فشل الإرسال للعميل")
             else:
                 send_telegram(chat_id, "اعمل Reply على رسالة التذكرة الأصلية")
-
         return jsonify({"ok": True}), 200
     except Exception as e:
         print(f"Telegram error: {e}")
