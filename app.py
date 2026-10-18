@@ -6,14 +6,20 @@ app = Flask(__name__)
 
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "ZoolTicket123")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID", "1409435178926240")
-WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN") or os.environ.get("WHATSAPP_ACCESS_TOKEN") or os.environ.get("META_ACCESS_TOKEN")
+WHATSAPP_TOKEN = (
+    os.environ.get("WHATSAPP_TOKEN")
+    or os.environ.get("WHATSAPP_ACCESS_TOKEN")
+    or os.environ.get("META_ACCESS_TOKEN")
+)
 TICKET_API_URL = os.environ.get("TICKET_API_URL", "")
 
 REPLY_TEXT = "Hello! We received your message."
 
+
 @app.route("/")
 def home():
     return "WhatsApp Ticket Bot is Live! Webhook: /webhook", 200
+
 
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
@@ -25,6 +31,7 @@ def verify_webhook():
         return challenge, 200
     print(f"Verification FAILED - received token: {token}")
     return "Verification failed", 403
+
 
 def send_reply(to_number, body):
     try:
@@ -42,6 +49,7 @@ def send_reply(to_number, body):
         print("Reply status:", r.status_code, r.text)
     except Exception as e:
         print(f"Reply error: {e}")
+
 
 @app.route("/webhook", methods=["POST"])
 def handle_message():
@@ -69,6 +77,7 @@ def handle_message():
     except Exception as e:
         print(f"Error handling webhook: {e}")
         return jsonify({"status": "error"}), 200
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
