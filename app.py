@@ -297,6 +297,30 @@ def handle_whatsapp():
         return jsonify({"status": "error"}), 200
 
 
+@app.route("/setup-telegram")
+def setup_telegram():
+    """Open this page once in the browser to connect Telegram to this server."""
+    if not TELEGRAM_BOT_TOKEN:
+        return "TELEGRAM_BOT_TOKEN is not set in Render Environment.", 400
+    try:
+        base = request.url_root.replace("http://", "https://")
+        me = requests.get(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getMe", timeout=10
+        ).json()
+        hook = requests.get(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook",
+            params={"url": base + "telegram"},
+            timeout=10,
+        ).json()
+        bot_name = (me.get("result") or {}).get("username")
+        return jsonify({"bot": bot_name, "getMe_ok": me.get("ok"),
+                        "webhook_ok": hook.get("ok"),
+                        "webhook_url": base + "telegram",
+                        "description": hook.get("description")}), 200
+    except Exception as e:
+        return f"Error: {e}", 500
+
+
 @app.route("/telegram", methods=["POST"])
 def handle_telegram():
     try:
