@@ -1,4 +1,3 @@
-
 import os
 from flask import Flask, request, jsonify
 import requests
@@ -20,10 +19,10 @@ def verify_webhook():
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
-    
+
     print(f"Verify attempt: mode={mode}, token={token}, challenge={challenge}")
     print(f"Expected token: {VERIFY_TOKEN}")
-    
+
     if mode == "subscribe" and token == VERIFY_TOKEN:
         print("WEBHOOK VERIFIED SUCCESSFULLY!")
         return challenge, 200
@@ -31,39 +30,49 @@ def verify_webhook():
         print(f"Verification FAILED - received token: {token}")
         return "Verification failed", 403
 
+def send_reply(to_number, body):
+    """إرسال رد نصي عبر واتساب Cloud API"""
+    try:
+        r = requests.post(
+            f"https://graph.facebook.com/v21.0/{PHONE_NUMBER_ID}/messages",
+            headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"},
+            json={
+                "messaging_product": "whatsapp",
+                "to": to_number,
+                "type": "text",
+                "text": {"body": body},
+            },
+            timeout=10,
+        )
+        print("Reply status:", r.status_code, r.text)
+    except Exception as e:
+        print(f"Reply error: {e}")
+
 @app.route("/webhook", methods=["POST"])
 def handle_message():
     try:
         data = request.get_json()
         print(f"Incoming webhook: {data}")
-        
-        # Forward to ticket system if configured
+
         if data and "entry" in data:
             for entry in data.get("entry", []):
                 for change in entry.get("changes", []):
                     value = change.get("value", {})
                     messages = value.get("messages", [])
                     for msg in messages:
-                        # Forward to your ticket system
+                        # Forward to ticket system
                         try:
                             if TICKET_API_URL:
                                 requests.post(TICKET_API_URL, json=data, timeout=5)
                         except Exception as e:
                             print(f"Forward error: {e}")
-                        
-                        # Optional: auto reply
+
+                        # Auto reply
                         from_number = msg.get("from")
                         msg_type = msg.get("type")
                         if msg_type == "text" and WHATSAPP_TOKEN and from_number:
                             text = msg.get("text", {}).get("body", "")
                             print(f"Message from {from_number}: {text}")
-                            # You can add auto-reply here
-        
-        return jsonify({"status": "ok"}), 200
-    except Exception as e:
-        print(f"Error handling webhook: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 200
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+                            send_reply(
+                                from_number,
+                                "أهلاً بك! استلمنا رسالتك وسيتم ف
